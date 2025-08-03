@@ -1,39 +1,81 @@
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
+import sqlite3
+from prefect import flow, task
 
-# 1. Extract
+@task
 def extract_books():
-    url = "http://books.toscrape.com"
-    response = requests.get(url)
-    soup = BeautifulSoup(response.text, 'html.parser')
+    base_url = "http://books.toscrape.com/catalogue/page-{}.html"
+    all_books = []
 
-    books = soup.select('.product_pod')
-    data = []
+    for page_num in range(1, 51):
+        url = base_url.format(page_num)
+        response = requests.get(url)
 
-    for book in books:
-        title = book.h3.a['title']
-        price_raw = book.find('p', class_='price_color').text
-        price_clean = price_raw.encode('ascii', 'ignore').decode().replace('£', '').strip()
-        data.append({'title': title, 'price': float(price_clean)})
-    return data
+        if response.status_code != 200:
+            break
 
-# 2. Transform
+        soup = BeautifulSoup(response.text, 'html.parser')
+        books = soup.select('.product_pod')
+
+        if not books:
+            break
+
+        for book in books:
+            title = book.h3.a['title']
+            price_raw = book.find('p', class_='price_color').text
+            price_clean = price_raw.encode('ascii', 'ignore').decode().replace('£', '').strip()
+            all_books.append({'title': title, 'price': float(price_clean)})
+
+    return all_books
+
+
+@task
 def transform_books(book_data):
     df = pd.DataFrame(book_data)
-    df['price'] = df['price'].round(2)  # Clean: round prices
+    df['price'] = df['price'].round(2)
     return df
 
-# 3. Load
-def load_to_csv(df, filename='books.csv'):
-    df.to_csv(filename, index=False)
-    print(f"✅ Data saved to {filename}")
 
-# Run ETL
-def run_etl():
-    raw_data = extract_books()
-    clean_data = transform_books(raw_data)
-    load_to_csv(clean_data)
+@task
+def load_to_sqlite(data, db_name='books.db'):
+    conn = sqlite3.connect(db_name)
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS books (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            price REAL
+        )
+    ''')
+
+    for _, row in data.iterrows():
+        title = row['title']
+        price = row['price']
+
+        if not title or not isinstance(price, (int, float)):
+            continue
+
+        cursor.execute(
+            'INSERT INTO books (title, price) VALUES (?, ?)',
+            (title, price)
+        )
+
+    conn.commit()
+    conn.close()
+
+
+
+
+@flow
+def etl_pipeline():
+    raw = extract_books()
+    clean = transform_books(raw)
+    load_to_sqlite(clean)
+
 
 if __name__ == "__main__":
-    run_etl()
+    etl_pipeline()
+    print("ETL pipeline completed successfully.")
