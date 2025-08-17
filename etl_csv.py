@@ -23,11 +23,11 @@ def transform_sales(df):
 
 
 @task
-def load_to_db(df, db_name='etl_data.db', table_name='sales_data'):
+def load_to_db(df, db_name='sales_data.db'):
     conn = sqlite3.connect(db_name)
-    df.to_sql(table_name, conn, if_exists='replace', index=False)
+    df.to_sql('sales_data', conn, if_exists='replace', index=False)
     conn.close()
-    print(f"📦 Loaded data to {table_name} table in {db_name}")
+    print(f"📦 Loaded data to sales_data table in {db_name}")
 
 @flow
 def etl_csv_to_sqlite():
